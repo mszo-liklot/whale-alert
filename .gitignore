@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Production builds
+dist/
+build/
+
+# Blockchain data (should be in separate directory)
+geth-data*/
+lighthouse-data*/
+prysm-data*/
+
+# Docker files (should be in separate directory)
+docker-compose.yml
+jwt-secret
+
+# Blockchain binaries
+lighthouse
+lighthouse-*.tar.gz
+geth
+geth-*
+beacon-chain-*
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

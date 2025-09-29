@@ -1,3 +1,10 @@
+export interface Token {
+  symbol: string;
+  name: string;
+  address: string;
+  category: string;
+}
+
 export interface WhaleTransaction {
   hash: string;
   from: string;
@@ -6,12 +13,11 @@ export interface WhaleTransaction {
   toLabel: string;
   value: string;
   valueUSD: string;
-  gasPrice: string;
+  gasPrice?: string;
   blockNumber: number;
   timestamp: string;
   type: 'ETH' | 'ERC20';
-  tokenSymbol?: string;
-  tokenName?: string;
+  token?: Token;
 }
 
 export interface NetworkInfo {

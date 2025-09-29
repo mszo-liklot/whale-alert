@@ -2,6 +2,7 @@ const express = require('express');
 const { ethers } = require('ethers');
 const WebSocket = require('ws');
 const cors = require('cors');
+const tokenConfig = require('./tokenConfig');
 require('dotenv').config();
 
 const app = express();
@@ -22,8 +23,10 @@ const wsProvider = new ethers.WebSocketProvider(WS_URL);
 const wss = new WebSocket.Server({ port: 8080 });
 
 // Whale transaction threshold (in ETH)
-const WHALE_THRESHOLD = ethers.parseEther('100'); // 100 ETH
-const ERC20_WHALE_THRESHOLD = ethers.parseEther('1000000'); // 1M tokens (for major tokens)
+const ETH_WHALE_THRESHOLD = ethers.parseEther('100'); // 100 ETH
+
+// ERC-20 Transfer Event Signature
+const TRANSFER_EVENT_SIGNATURE = tokenConfig.TRANSFER_EVENT_SIGNATURE;
 
 // Store recent whale transactions
 let recentWhaleTransactions = [];
@@ -52,10 +55,68 @@ function getAddressLabel(address) {
     return knownAddresses[address.toLowerCase()] || `Unknown (${address.slice(0, 6)}...${address.slice(-4)})`;
 }
 
-// Check if transaction is a whale transaction
+// Check if transaction is a whale transaction (ETH)
 function isWhaleTransaction(tx) {
     if (!tx.value) return false;
-    return tx.value >= WHALE_THRESHOLD;
+    return tx.value >= ETH_WHALE_THRESHOLD;
+}
+
+// Decode ERC-20 Transfer log
+function decodeTransferLog(log) {
+    try {
+        // Transfer(address indexed from, address indexed to, uint256 value)
+        const from = '0x' + log.topics[1].slice(26);
+        const to = '0x' + log.topics[2].slice(26);
+        const value = BigInt(log.data);
+
+        return {
+            tokenAddress: log.address.toLowerCase(),
+            from: from,
+            to: to,
+            value: value
+        };
+    } catch (error) {
+        console.error('Error decoding transfer log:', error);
+        return null;
+    }
+}
+
+// Check if ERC-20 transfer is a whale transaction
+function isERC20WhaleTransaction(decodedLog) {
+    const token = tokenConfig.getTokenByAddress(decodedLog.tokenAddress);
+    if (!token) return false;
+
+    // Convert value to human readable format
+    const valueInTokens = Number(decodedLog.value) / Math.pow(10, token.decimals);
+
+    return valueInTokens >= token.whaleThreshold;
+}
+
+// Format ERC-20 transaction for display
+function formatERC20Transaction(decodedLog, blockNumber, txHash) {
+    const token = tokenConfig.getTokenByAddress(decodedLog.tokenAddress);
+    if (!token) return null;
+
+    const valueInTokens = Number(decodedLog.value) / Math.pow(10, token.decimals);
+
+    return {
+        hash: txHash,
+        from: decodedLog.from,
+        fromLabel: getAddressLabel(decodedLog.from),
+        to: decodedLog.to,
+        toLabel: getAddressLabel(decodedLog.to),
+        value: valueInTokens.toLocaleString(),
+        valueUSD: token.category === 'stablecoin' ? valueInTokens.toLocaleString() : 'N/A',
+        token: {
+            symbol: token.symbol,
+            name: token.name,
+            address: token.address,
+            category: token.category
+        },
+        blockNumber: blockNumber,
+        timestamp: new Date().toISOString(),
+        type: 'ERC20'
+    };
 }
 
 // Format transaction for display
@@ -118,20 +179,55 @@ async function monitorBlocks() {
 
                 // Check each transaction for whale activity
                 for (const tx of block.transactions) {
+                    // Check ETH whale transactions
                     if (isWhaleTransaction(tx)) {
                         const formattedTx = formatTransaction(tx, blockNumber);
                         recentWhaleTransactions.unshift(formattedTx);
 
-                        // Keep only last 100 transactions
-                        if (recentWhaleTransactions.length > 100) {
-                            recentWhaleTransactions = recentWhaleTransactions.slice(0, 100);
-                        }
-
-                        console.log(`🐋 WHALE ALERT: ${formattedTx.value} ETH from ${formattedTx.fromLabel} to ${formattedTx.toLabel}`);
-
-                        // Broadcast to connected clients
+                        console.log(`🐋 ETH WHALE ALERT: ${formattedTx.value} ETH from ${formattedTx.fromLabel} to ${formattedTx.toLabel}`);
                         broadcastWhaleTransaction(formattedTx);
                     }
+                }
+
+                // Get transaction receipts to check for ERC-20 transfers
+                const receipts = await Promise.all(
+                    block.transactions.map(async (tx) => {
+                        try {
+                            return await provider.getTransactionReceipt(tx.hash);
+                        } catch (error) {
+                            console.error(`Error getting receipt for ${tx.hash}:`, error.message);
+                            return null;
+                        }
+                    })
+                );
+
+                // Check ERC-20 transfers in transaction logs
+                for (const receipt of receipts) {
+                    if (!receipt || !receipt.logs) continue;
+
+                    for (const log of receipt.logs) {
+                        // Check if this is a Transfer event
+                        if (log.topics[0] === TRANSFER_EVENT_SIGNATURE && log.topics.length === 3) {
+                            const decodedLog = decodeTransferLog(log);
+                            if (!decodedLog) continue;
+
+                            // Check if it's a whale transaction
+                            if (isERC20WhaleTransaction(decodedLog)) {
+                                const formattedTx = formatERC20Transaction(decodedLog, blockNumber, receipt.hash);
+                                if (formattedTx) {
+                                    recentWhaleTransactions.unshift(formattedTx);
+
+                                    console.log(`🐋 ${formattedTx.token.symbol} WHALE ALERT: ${formattedTx.value} ${formattedTx.token.symbol} from ${formattedTx.fromLabel} to ${formattedTx.toLabel}`);
+                                    broadcastWhaleTransaction(formattedTx);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Keep only last 100 transactions
+                if (recentWhaleTransactions.length > 100) {
+                    recentWhaleTransactions = recentWhaleTransactions.slice(0, 100);
                 }
             } catch (error) {
                 console.error(`Error processing block ${blockNumber}:`, error.message);
@@ -176,6 +272,41 @@ app.get('/api/network-status', async (req, res) => {
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
+});
+
+// Get supported tokens
+app.get('/api/tokens', (req, res) => {
+    const tokens = Object.entries(tokenConfig)
+        .filter(([key, value]) => value && value.address)
+        .map(([symbol, config]) => ({
+            symbol,
+            name: config.name,
+            address: config.address,
+            decimals: config.decimals,
+            category: config.category,
+            priority: config.priority,
+            whaleThreshold: config.whaleThreshold
+        }));
+
+    res.json({
+        tokens,
+        count: tokens.length
+    });
+});
+
+// Get whale transactions by token
+app.get('/api/whale-transactions/:token', (req, res) => {
+    const token = req.params.token.toUpperCase();
+    const filteredTransactions = recentWhaleTransactions.filter(tx => {
+        if (token === 'ETH') return tx.type === 'ETH';
+        return tx.type === 'ERC20' && tx.token && tx.token.symbol === token;
+    });
+
+    res.json({
+        token,
+        transactions: filteredTransactions,
+        count: filteredTransactions.length
+    });
 });
 
 // WebSocket connection handling

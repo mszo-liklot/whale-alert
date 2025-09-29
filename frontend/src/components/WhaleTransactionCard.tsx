@@ -13,29 +13,55 @@ export default function WhaleTransactionCard({ transaction }: Props) {
     return new Date(timestamp).toLocaleTimeString();
   };
 
-  const getValueColor = (value: string) => {
-    const eth = parseFloat(value);
-    if (eth >= 1000) return 'text-red-400';
-    if (eth >= 500) return 'text-orange-400';
-    if (eth >= 100) return 'text-yellow-400';
-    return 'text-green-400';
+  const getValueColor = (value: string, type: string) => {
+    const amount = parseFloat(value.replace(/,/g, ''));
+    if (type === 'ETH') {
+      if (amount >= 1000) return 'text-red-400';
+      if (amount >= 500) return 'text-orange-400';
+      if (amount >= 100) return 'text-yellow-400';
+      return 'text-green-400';
+    } else {
+      // For ERC-20 tokens, use USD value for color coding
+      const usdValue = parseFloat(transaction.valueUSD.replace(/,/g, '')) || 0;
+      if (usdValue >= 5000000) return 'text-red-400';    // $5M+
+      if (usdValue >= 2000000) return 'text-orange-400'; // $2M+
+      if (usdValue >= 1000000) return 'text-yellow-400'; // $1M+
+      return 'text-green-400';
+    }
+  };
+
+  const getTokenEmoji = (category?: string) => {
+    switch (category) {
+      case 'stablecoin': return '💰';
+      case 'defi': return '🔄';
+      case 'meme': return '🐸';
+      case 'wrapped': return '🔗';
+      case 'staking': return '⚡';
+      case 'oracle': return '🔮';
+      default: return '🪙';
+    }
   };
 
   return (
     <div className="bg-white/5 backdrop-blur-sm rounded-xl p-6 border border-white/10 hover:border-blue-500/30 transition-colors">
       <div className="flex items-start justify-between mb-4">
         <div className="flex items-center space-x-3">
-          <div className="text-2xl">🐋</div>
+          <div className="text-2xl">
+            {transaction.type === 'ETH' ? '🐋' : getTokenEmoji(transaction.token?.category)}
+          </div>
           <div>
             <div className="flex items-center space-x-2">
-              <span className={`text-2xl font-bold ${getValueColor(transaction.value)}`}>
-                {parseFloat(transaction.value).toLocaleString()} ETH
+              <span className={`text-2xl font-bold ${getValueColor(transaction.value, transaction.type)}`}>
+                {transaction.value} {transaction.type === 'ETH' ? 'ETH' : transaction.token?.symbol}
               </span>
               <span className="text-gray-400">
-                (${parseFloat(transaction.valueUSD).toLocaleString()})
+                {transaction.valueUSD !== 'N/A' && `($${transaction.valueUSD})`}
               </span>
             </div>
             <div className="text-sm text-gray-400">
+              {transaction.type === 'ERC20' && transaction.token && (
+                <span className="text-blue-300 mr-2">{transaction.token.name}</span>
+              )}
               Block #{transaction.blockNumber.toLocaleString()} • {formatTime(transaction.timestamp)}
             </div>
           </div>
@@ -83,14 +109,22 @@ export default function WhaleTransactionCard({ transaction }: Props) {
       {/* Transaction Details */}
       <div className="mt-4 pt-4 border-t border-white/10">
         <div className="grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <span className="text-gray-400">Gas Price:</span>
-            <span className="ml-2 font-mono text-blue-400">{parseFloat(transaction.gasPrice).toFixed(2)} Gwei</span>
-          </div>
+          {transaction.gasPrice && (
+            <div>
+              <span className="text-gray-400">Gas Price:</span>
+              <span className="ml-2 font-mono text-blue-400">{parseFloat(transaction.gasPrice).toFixed(2)} Gwei</span>
+            </div>
+          )}
           <div>
             <span className="text-gray-400">Type:</span>
             <span className="ml-2 font-mono text-purple-400">{transaction.type}</span>
           </div>
+          {transaction.type === 'ERC20' && transaction.token && (
+            <div className="col-span-2">
+              <span className="text-gray-400">Token Contract:</span>
+              <span className="ml-2 font-mono text-blue-400 text-xs">{formatAddress(transaction.token.address)}</span>
+            </div>
+          )}
         </div>
       </div>
     </div>
